@@ -1,3 +1,19 @@
+editline (1.17.0) unstable; urgency=medium
+
+  * Simple multi-line support
+  * Handle internal realloc() errors better
+  * Fix return value from read_history() and write_history()
+  * Fix potential NULL pointer dereference in key binging lookup
+
+ -- Joachim Nilsson <troglobit@gmail.com>  Sun, 05 Jan 2020 09:47:34 +0100
+
+editline (1.16.1) unstable; urgency=medium
+
+  * Minor bug fix and documentation update release.
+  * Add missing pkg-config .pc file to -dev package
+
+ -- Joachim Nilsson <troglobit@gmail.com>  Fri, 07 Jun 2019 11:45:50 +0200
+
 editline (1.16.0) unstable; urgency=medium
 
   * New upstream release, v1.60.0

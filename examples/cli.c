@@ -38,9 +38,9 @@ static char *my_rl_complete(char *token, int *match)
     int count = 0;
 
     for (i = 0; list[i]; i++) {
-	int partlen = strlen (token); /* Part of token */
+	int partlen = strlen(token); /* Part of token */
 
-	if (!strncmp (list[i], token, partlen)) {
+	if (!strncmp(list[i], token, partlen)) {
 	    index = i;
 	    matchlen = partlen;
 	    count ++;
@@ -49,7 +49,7 @@ static char *my_rl_complete(char *token, int *match)
 
     if (count == 1) {
 	*match = 1;
-	return strdup (list[index] + matchlen);
+	return strdup(list[index] + matchlen);
     }
 
     return NULL;
@@ -60,15 +60,18 @@ static int my_rl_list_possib(char *token, char ***av)
 {
     int i, num, total = 0;
     char **copy;
-   
+
     for (num = 0; list[num]; num++)
 	;
 
-    copy = (char **) malloc (num * sizeof(char *));
+    if (!num)
+	return 0;
+
+    copy = malloc(num * sizeof(char *));
     for (i = 0; i < num; i++) {
-	if (!strncmp (list[i], token, strlen (token))) {
-	    copy[total] = strdup (list[i]);
-	    total ++;
+	if (!strncmp(list[i], token, strlen (token))) {
+	    copy[total] = strdup(list[i]);
+	    total++;
 	}
     }
     *av = copy;
@@ -98,41 +101,70 @@ el_status_t list_possible(void)
     return el_ring_bell();
 }
 
-el_status_t do_break(void)
-{
-    puts("Breakout!");
-    return CSeof;
-}
-
-el_status_t do_exit(void)
-{
-    puts("Bye bye!");
-    return CSeof;
-}
-
 el_status_t do_suspend(void)
 {
     puts("Abort!");
     return CSstay;
 }
 
+static void breakit(int signo)
+{
+    (void)signo;
+    puts("Got SIGINT");
+}
+
+/* Use el_no_echo when reading passwords and similar */
+static int unlock(const char *passwd)
+{
+    char *prompt = "Enter password: ";
+    char *line;
+    int rc = 1;
+
+    el_no_echo = 1;
+
+    while ((line = readline(prompt))) {
+	rc = strncmp(line, passwd, strlen(passwd));
+	free(line);
+
+	if (rc) {
+	    printf("\nWrong password, please try again, it's secret.\n");
+	    continue;
+	}
+
+	printf("\nAchievement unlocked!\n");
+	break;
+    }
+
+    el_no_echo = 0;
+
+    return rc;
+}
+
 int main(void)
 {
     char *line;
-    char	*prompt = "cli> ";
+    char *prompt = "cli> ";
+
+    signal(SIGINT, breakit);
 
     /* Setup callbacks */
     rl_set_complete_func(&my_rl_complete);
     rl_set_list_possib_func(&my_rl_list_possib);
+
     el_bind_key('?', list_possible);
-    el_bind_key(CTL('C'), do_break);
-    el_bind_key(CTL('D'), do_exit);
     el_bind_key(CTL('Z'), do_suspend);
     read_history(HISTORY);
 
-    while ((line = readline(prompt)) != NULL) {
-	printf("\t\t\t|%s|\n", line);
-	free(line);
+    while ((line = readline(prompt))) {
+	if (!strncmp(line, "unlock", 6) && unlock("secret")) {
+	    free(line);
+	    fprintf(stderr, "\nSecurity breach, user logged out!\n");
+	    break;
+	}
+
+	if (*line != '\0')
+	    printf("\t\t\t|%s|\n", line);
+ 	free(line);
     }
 
     write_history(HISTORY);

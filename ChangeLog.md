@@ -4,6 +4,40 @@ Change Log
 All notable changes to the project are documented in this file.
 
 
+[1.17.0][] - 2020-01-05
+-----------------------
+
+### Changes
+- Simple multi-line support by Dima Volynets, @dvolynets
+
+### Fixes
+- Fix return value from `read_history()` and `write_history()`, could
+  return `errno` instead of `EOF` to indicate error.  Now both functions
+  have uniform return values on error
+- Handle internal `realloc()` errors better.  Now memory is not leaked
+  if `realloc()` fails
+- Fix possible NULL pointer dereference in key binding lookup function
+
+
+[1.16.1][] - 2019-06-07
+-----------------------
+
+### Changes
+- Major updates to the `editline.3` man page
+- Cleanup of examples `cli.c` and `fileman.c`
+- Add example of hidden input prompt to `cli.c`
+
+### Fixes
+- Fix #20: `configure --disable-eof` does not bite
+- Fix #23: Make Ctrl-L clear the screan instead of starting a new line  
+  Like Ctrl-D, which exits, Ctrl-L only clears the screen when the line
+  is empty and the cursor is at the start of the line, otherwise Ctrl-L
+  will redraw/refresh the current line.
+- Fix #24: Fix behavior when TTY is narrower than column width, by Will Dietz
+- Fix #25: Avoid continuously duplicate commands in history
+- Fix #31: Aborting i-search with Ctrl-C should not generate signal
+
+
 [1.16.0][] - 2018-09-16
 -----------------------
 
@@ -203,7 +237,9 @@ Adaptations to Debian editline package.
 - First version, forked from Minix current 2008-06-06
 
 
-[UNRELEASED]:    https://github.com/troglobit/finit/compare/1.16.0...HEAD
+[UNRELEASED]:    https://github.com/troglobit/finit/compare/1.17.0...HEAD
+[1.17.0]:        https://github.com/troglobit/finit/compare/1.16.1...1.17.0
+[1.16.1]:        https://github.com/troglobit/finit/compare/1.16.0...1.16.1
 [1.16.0]:        https://github.com/troglobit/finit/compare/1.15.3...1.16.0
 [1.15.3]:        https://github.com/troglobit/finit/compare/1.15.2...1.15.3
 [1.15.2]:        https://github.com/troglobit/finit/compare/1.15.1...1.15.2
@@ -220,9 +256,3 @@ Adaptations to Debian editline package.
 [Travis-CI]:     https://travis-ci.org/troglobit/uftpd
 [Coverity Scan]: https://scan.coverity.com/projects/2947
 [README.md]:     https://github.com/troglobit/editline/blob/master/README.md
-
-<!--
-  -- Local Variables:
-  -- mode: markdown
-  -- End:
-  -->
