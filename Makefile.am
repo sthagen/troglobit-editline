@@ -4,10 +4,6 @@ doc_DATA        = README.md LICENSE
 EXTRA_DIST      = README.md LICENSE ChangeLog.md INSTALL.md
 SUBDIRS         = src include man examples
 
-## Generate .deb package
-package build-deb:
-	@dpkg-buildpackage -uc -us
-
 ## Generate MD5 checksum file
 MD5 = md5sum
 md5-dist:
@@ -39,7 +35,7 @@ package:
 	dpkg-buildpackage -uc -us -B
 
 ## Target to run when building a release
-release: distcheck release-hook md5-dist package
+release: release-hook distcheck md5-dist package
 	@echo
 	@echo "Resulting release files:"
 	@echo "========================================================================="
