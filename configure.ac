@@ -1,11 +1,11 @@
-AC_INIT(editline, 1.17.1, https://github.com/troglobit/editline/issues)
+AC_INIT(editline, 1.17.2-pre, https://github.com/troglobit/editline/issues)
 AC_CONFIG_AUX_DIR(aux)
 AM_INIT_AUTOMAKE([1.11 foreign dist-xz])
 AM_SILENT_RULES([yes])
 
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_SRCDIR([src/editline.c])
-AC_CONFIG_HEADER([config.h])
+AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([Makefile libeditline.pc src/Makefile include/Makefile man/Makefile examples/Makefile])
 
 # Checks for programs.
@@ -18,7 +18,7 @@ LT_INIT
 # Checks for header files.
 AC_HEADER_DIRENT
 AC_HEADER_STAT
-AC_HEADER_STDC
+
 # Check for malloc.h instead of AC_FUNC_MALLOC/REALLOC AIX and others
 # mess up the traditional malloc check.
 AC_CHECK_HEADERS([malloc.h signal.h stdlib.h string.h termcap.h termio.h termios.h sgtty.h unistd.h])
@@ -62,7 +62,7 @@ AC_ARG_ENABLE(termcap,
    AS_HELP_STRING([--enable-termcap], [Use termcap library to query terminal size.]))
 
 AC_ARG_ENABLE([examples],
-	[AC_HELP_STRING([--enable-examples], [Build examples/ directory])],
+	[AS_HELP_STRING([--enable-examples], [Build examples/ directory])],
 	[], [enable_examples=no])
 
 #
@@ -100,7 +100,8 @@ AS_IF([test "x$enable_termcap" = "xyes"], [
                ])
             ])
          ])
-      ])])
+      ])
+    ])
 
 # Generate all files
 AC_OUTPUT
