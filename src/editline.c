@@ -95,6 +95,11 @@ static char       CLEAR[]= "\ec";
 static const char *el_term = "dumb";
 static int        Repeat;
 static int        old_point;
+/* Canonical key a cursor jump declares for reposition(): the Home/End keys
+ * arrive as multi-byte escape sequences, so reposition() only sees the
+ * leading ESC and cannot tell them from any other escape.  beg_line() and
+ * end_line() set this so they are repositioned like Ctrl-A / Ctrl-E. */
+static int        repos_key;
 static int        el_push_back;
 static int        el_pushed;
 static int        el_intr_pending;
@@ -115,6 +120,9 @@ static const char *old_prompt = NULL;
 static rl_vcpfunc_t *line_handler = NULL;
 static char       *line_up = "\x1b[A";
 static char       *line_down = "\x1b[B";
+/* Used as a display-column proxy in the wrap math: exact only for a
+ * printable single-width prompt.  A multibyte or escape-bearing prompt
+ * needs a real width (see RL_PROMPT_START/END_IGNORE, issue #48). */
 static int        prompt_len = 0;
 
 int               el_no_echo = 0; /* e.g., under Emacs */
@@ -152,6 +160,61 @@ static int is_alpha_num(unsigned char c)
         return 1;
 
     return 0;
+}
+
+/* True for a UTF-8 continuation byte (0x80-0xBF), i.e. a trailing byte of
+ * a multibyte glyph.  Continuation bytes occupy zero display columns and
+ * never start a character, so cursor motion steps over a whole glyph. */
+static int utf8_is_cont(unsigned char c)
+{
+    return (c & 0xC0) == 0x80;
+}
+
+/* Number of glyph starts in rl_line_buffer[begin .. begin + count), i.e. the
+ * character count of a byte range.  Equals count for plain ASCII. */
+static int glyph_count(int begin, int count)
+{
+    int n = 0, k;
+
+    for (k = 0; k < count; k++) {
+        if (!utf8_is_cont(rl_line_buffer[begin + k]))
+            n++;
+    }
+
+    return n;
+}
+
+/* Byte offset of the glyph boundary just after pos: skip the start byte and
+ * any UTF-8 continuation bytes that follow it.  Clamped to rl_end. */
+static int next_glyph(int pos)
+{
+    if (pos < rl_end) {
+        do {
+            pos++;
+        } while (pos < rl_end && utf8_is_cont(rl_line_buffer[pos]));
+    }
+
+    return pos;
+}
+
+/* Display columns occupied by rl_line_buffer[0 .. b): one column per glyph,
+ * like the wrap math's byte==column assumption but corrected for multibyte
+ * (continuation bytes add no column).  Equals b for plain ASCII. */
+static int disp_col(int b)
+{
+    return glyph_count(0, b);
+}
+
+/* Inverse of disp_col(): byte offset of the glyph boundary at display
+ * column col.  Clamped to [0, rl_end]. */
+static int disp_col_to_byte(int col)
+{
+    int b = 0;
+
+    while (b < rl_end && col-- > 0)
+        b = next_glyph(b);
+
+    return b;
 }
 
 /*
@@ -213,14 +276,23 @@ static void tty_show(unsigned char c)
 
 static void tty_string(const char *p)
 {
-    int i = rl_point + prompt_len + 1;
+    int i = disp_col(rl_point) + prompt_len + 1;
 
     while (*p) {
-        tty_show(*p++);
-        if ((i++) % tty_cols == 0) {
+        unsigned char c = *p++;
+
+        tty_show(c);
+        if (utf8_is_cont(c))
+            continue;                  /* continuation byte: zero columns */
+        /* The margin glitch forces the terminal's deferred wrap.  A glyph
+         * is echoed one keystroke at a time, so firing it after a multibyte
+         * start byte would split the glyph; let the terminal handle the
+         * wrap natively for those and only glitch on ASCII. */
+        if (i % tty_cols == 0 && c < 0x80) {
             tty_put(' ');
             tty_put('\b');
         }
+        i++;
     }
 }
 
@@ -336,9 +408,17 @@ void el_print_columns(int ac, char **av)
 
 static void reposition(int key)
 {
-    int len_with_prompt = prompt_len + rl_end;
+    int len_with_prompt = prompt_len + disp_col(rl_end);
     int n =  len_with_prompt / tty_cols;                  /* determine the number of lines */
     int i = 0;
+    int col;
+
+    /* A Home/End jump arrives as an escape sequence, so reposition() is
+     * passed the leading ESC; honor the canonical key it declared instead. */
+    if (repos_key) {
+        key = repos_key;
+        repos_key = 0;
+    }
 
     tty_put('\r');
 
@@ -347,19 +427,26 @@ static void reposition(int key)
 
 	/* determine num of current line */
         if (key == CTL('A') || key == CTL('E') || key == rl_kill)
-            line = (prompt_len + old_point) / tty_cols;
+            line = (prompt_len + disp_col(old_point)) / tty_cols;
         else
             line = len_with_prompt / tty_cols;
 
 	/* move to end of line(s) */
         if (key == CTL('E')) {
 	    int k;
+	    /* Row holding the end of the line and that row's column count.  A
+	     * line ending exactly on a row boundary keeps the cursor in that
+	     * row's last column (deferred wrap), not at the start of the next
+	     * row -- otherwise Ctrl-E steps onto a fresh row below and the
+	     * terminal scrolls the whole line up. */
+	    int last_row  = (len_with_prompt - 1) / tty_cols;  /* = n, less one on an exact fit */
+	    int last_cols = len_with_prompt - last_row * tty_cols;
 
-            for (k = line; k < n; k++)
+            for (k = line; k < last_row; k++)
                 tty_puts(line_down);
 
-	    /* determine reminder of last line and redraw only it */
-            i = rl_point - (len_with_prompt % tty_cols);
+	    /* redraw only that last row, landing the cursor at its end */
+            i = disp_col_to_byte(disp_col(rl_point) - last_cols);
         } else {
 	    int k;
 
@@ -373,11 +460,20 @@ static void reposition(int key)
         tty_puts(rl_prompt);
     }
 
+    col = disp_col(i) + prompt_len;
     for (; i < rl_point; i++) {
         tty_show(rl_line_buffer[i]);
-
-	/* move to the next line */
-        if ((i + prompt_len + 1) % tty_cols == 0)
+        /* Look ahead at the next byte, not this one: the wrap newline is
+         * emitted inline with the glyph's bytes, so it must wait until the
+         * whole glyph is written or it would split it.  (tty_string and
+         * ceol guard on the current byte because their boundary action is
+         * a glitch/erase, not a byte of the glyph -- do not unify these.) */
+        if (utf8_is_cont((unsigned char)rl_line_buffer[i + 1]))
+            continue;
+	/* Wrap to the next row only when more characters follow; after the
+	 * final one the cursor stays at the end of this row (deferred wrap),
+	 * so a line ending on a row boundary does not scroll. */
+        if ((++col) % tty_cols == 0 && i + 1 < rl_point)
             tty_put('\n');
     }
 }
@@ -385,20 +481,25 @@ static void reposition(int key)
 static void left(el_status_t Change)
 {
     if (rl_point) {
-        if ((rl_point + prompt_len) % tty_cols == 0) {
-            tty_puts(line_up);
-            tty_forwardn(tty_cols);
-        } else {
-            tty_back();
-        }
+        unsigned char c = rl_line_buffer[rl_point - 1];
 
-        if (ISMETA(rl_line_buffer[rl_point - 1])) {
-            if (rl_meta_chars) {
-                tty_back();
+        /* Continuation bytes are zero-width: emit no cursor movement. */
+        if (!utf8_is_cont(c)) {
+            if ((disp_col(rl_point) + prompt_len) % tty_cols == 0) {
+                tty_puts(line_up);
+                tty_forwardn(tty_cols);
+            } else {
                 tty_back();
             }
-        } else if (ISCTL(rl_line_buffer[rl_point - 1])) {
-            tty_back();
+
+            if (ISMETA(c)) {
+                if (rl_meta_chars) {
+                    tty_back();
+                    tty_back();
+                }
+            } else if (ISCTL(c)) {
+                tty_back();
+            }
         }
     }
 
@@ -408,13 +509,34 @@ static void left(el_status_t Change)
 
 static void right(el_status_t Change)
 {
-    if ((rl_point + prompt_len + 1) % tty_cols == 0)
+    unsigned char c = rl_line_buffer[rl_point];
+
+    /* A continuation byte is zero-width, so it never triggers a wrap. */
+    if (!utf8_is_cont(c) && (disp_col(rl_point) + prompt_len + 1) % tty_cols == 0)
         tty_put('\n');
     else
-        tty_show(rl_line_buffer[rl_point]);
+        tty_show(c);
 
     if (Change == CSmove)
         rl_point++;
+}
+
+/* Step the cursor one whole glyph, skipping trailing UTF-8 continuation
+ * bytes.  Layered on the byte-granular left()/right() so the per-byte
+ * callers (word, case, transpose) keep working unchanged. */
+static void glyph_right(void)
+{
+    int next = next_glyph(rl_point);
+
+    while (rl_point < next)
+        right(CSmove);
+}
+
+static void glyph_left(void)
+{
+    do {
+        left(CSmove);
+    } while (rl_point > 0 && utf8_is_cont(rl_line_buffer[rl_point]));
 }
 
 el_status_t el_ring_bell(void)
@@ -488,11 +610,15 @@ static el_status_t do_case(el_case_t type)
             end = rl_end;
 
         for (i = rl_point, p = &rl_line_buffer[i]; rl_point < end; p++) {
-            if ((type == TOupper) || (type == TOcapitalize && rl_point == i)) {
-                if (islower((unsigned char)(*p)))
-                    *p = toupper((unsigned char)(*p));
-            } else if (isupper((unsigned char)(*p))) {
-                *p = tolower((unsigned char)(*p));
+            /* Only fold ASCII; a multibyte glyph's bytes must be left as-is,
+             * else a single-byte locale's toupper/tolower corrupts them. */
+            if ((unsigned char)*p < 0x80) {
+                if ((type == TOupper) || (type == TOcapitalize && rl_point == i)) {
+                    if (islower((unsigned char)(*p)))
+                        *p = toupper((unsigned char)(*p));
+                } else if (isupper((unsigned char)(*p))) {
+                    *p = tolower((unsigned char)(*p));
+                }
             }
             right(CSmove);
         }
@@ -519,7 +645,7 @@ static el_status_t case_cap_word(void)
 static void ceol(void)
 {
     int         extras = 0;
-    int         i;
+    int         base, col, i;
     char        *p;
 
     while (rl_point < 0) {
@@ -527,8 +653,12 @@ static void ceol(void)
         rl_point++;
     }
 
+    base = disp_col(rl_point) + prompt_len;
+    col = base;
     for (i = rl_point, p = &rl_line_buffer[i]; i <= rl_end; i++, p++) {
-        if ((i + prompt_len + 1) % tty_cols == 0){
+        if (utf8_is_cont((unsigned char)*p))
+            continue;               /* continuation byte: no display column */
+        if ((++col) % tty_cols == 0) {
             tty_put(' ');
             tty_put('\n');
         }
@@ -546,8 +676,8 @@ static void ceol(void)
         }
     }
 
-    for (i += extras; i > rl_point; i--) {
-        if ((i + prompt_len) % tty_cols == 0) {
+    for (col += extras; col > base; col--) {
+        if (col % tty_cols == 0) {
             tty_puts(line_up);
             tty_forwardn(tty_cols);
         } else {
@@ -558,7 +688,7 @@ static void ceol(void)
 
 static void clear_line(void)
 {
-    int n = (rl_point + prompt_len) / tty_cols;
+    int n = (disp_col(rl_point) + prompt_len) / tty_cols;
     rl_point = -(int)strlen(rl_prompt);
 
     if (n > 0) {
@@ -819,7 +949,7 @@ static el_status_t fd_char(void)
     do {
         if (rl_point >= rl_end)
             break;
-        right(CSmove);
+        glyph_right();
     } while (++i < Repeat);
     return CSstay;
 }
@@ -871,7 +1001,8 @@ static el_status_t delete_string(int count)
     if (rl_point + count > rl_end && (count = rl_end - rl_point) <= 0)
         return CSstay;
 
-    if (count > 1)
+    /* Yank the deletion only when it spans more than one whole glyph. */
+    if (glyph_count(rl_point, count) > 1)
         save_yank(rl_point, count);
 
     for (p = &rl_line_buffer[rl_point], i = rl_end - (rl_point + count) + 1; --i >= 0; p++)
@@ -891,7 +1022,7 @@ static el_status_t bk_char(void)
     do {
         if (rl_point == 0)
             break;
-        left(CSmove);
+        glyph_left();
     } while (++i < Repeat);
 
     return CSstay;
@@ -899,15 +1030,15 @@ static el_status_t bk_char(void)
 
 static el_status_t bk_del_char(void)
 {
-    int i = 0;
+    int start = rl_point, n = 0;
 
     do {
         if (rl_point == 0)
             break;
-        left(CSmove);
-    } while (++i < Repeat);
+        glyph_left();
+    } while (++n < Repeat);
 
-    return delete_string(i);
+    return delete_string(start - rl_point);
 }
 
 static el_status_t kill_line(void)
@@ -969,6 +1100,7 @@ static el_status_t beg_line(void)
 {
     if (rl_point) {
         rl_point = 0;
+        repos_key = CTL('A');
         return CSmove;
     }
 
@@ -979,6 +1111,7 @@ static el_status_t end_line(void)
 {
     if (rl_point != rl_end) {
         rl_point = rl_end;
+        repos_key = CTL('E');
         return CSmove;
     }
 
@@ -987,7 +1120,14 @@ static el_status_t end_line(void)
 
 static el_status_t del_char(void)
 {
-    return delete_string(Repeat == NO_ARG ? CSeof : Repeat);
+    int glyphs = Repeat == NO_ARG ? 1 : Repeat;
+    int pos = rl_point;
+
+    /* Span forward over whole glyphs so a multibyte character deletes as one. */
+    while (glyphs-- > 0 && pos < rl_end)
+        pos = next_glyph(pos);
+
+    return delete_string(pos - rl_point);
 }
 
 el_status_t el_del_char(void)
@@ -1614,10 +1754,46 @@ void add_history(const char *p)
 }
 
 
+/* Read one newline-terminated line of any length, growing the buffer as
+ * needed.  Returns an allocated string without the trailing newline, or
+ * NULL at end of file.  A fixed buffer would split long lines (and chop a
+ * byte mid-glyph for multibyte input) across separate history entries. */
+static char *read_line(FILE *fp)
+{
+    size_t len = 0, size = MEM_INC;
+    char *line, *tmp;
+    int c;
+
+    line = malloc(size);
+    if (!line)
+	return NULL;
+
+    while ((c = getc(fp)) != EOF && c != '\n') {
+	if (len + 1 >= size) {
+	    tmp = realloc(line, size + MEM_INC);
+	    if (!tmp) {
+		free(line);
+		return NULL;
+	    }
+	    line = tmp;
+	    size += MEM_INC;
+	}
+	line[len++] = (char)c;
+    }
+
+    if (c == EOF && len == 0) {
+	free(line);
+	return NULL;
+    }
+
+    line[len] = '\0';
+    return line;
+}
+
 int read_history(const char *filename)
 {
     FILE *fp;
-    char buf[SCREEN_INC];
+    char *line;
 
     hist_alloc();
 
@@ -1626,12 +1802,9 @@ int read_history(const char *filename)
 	return EOF;
 
     H.Size = 0;
-    while (H.Size < el_hist_size) {
-	if (!fgets(buf, SCREEN_INC, fp))
-	    break;
-
-	buf[strlen(buf) - 1] = 0; /* Remove '\n' */
-	add_history(buf);
+    while (H.Size < el_hist_size && (line = read_line(fp)) != NULL) {
+	add_history(line);
+	free(line);
     }
 
     return fclose(fp);
@@ -1648,8 +1821,12 @@ int write_history(const char *filename)
     if (!fp)
 	return EOF;
 
-    while (i < H.Size)
-	fprintf(fp, "%s\n", H.Lines[i++]);
+    while (i < H.Size) {
+	if (fprintf(fp, "%s\n", H.Lines[i++]) < 0) {
+	    fclose(fp);
+	    return EOF;
+	}
+    }
 
     return fclose(fp);
 }
@@ -1743,7 +1920,8 @@ static el_status_t c_complete(void)
         }
 
         while (*p) {
-            if ((*p < ' ' || strchr(SEPS, *p) != NULL)
+            if (!rl_complete_is_custom()
+                && (*p < ' ' || strchr(SEPS, *p) != NULL)
                 && (!unique || p[1] != 0)) {
                 *q++ = '\\';
             }
@@ -1866,7 +2044,7 @@ static el_status_t fd_kill_word(void)
 
     do_forward(CSstay);
     if (old_point != rl_point) {
-        i = rl_point - old_point - 1;
+        i = rl_point - old_point;
         rl_point = old_point;
         return delete_string(i);
     }

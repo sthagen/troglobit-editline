@@ -1,4 +1,4 @@
-AC_INIT(editline, 1.17.2-pre, https://github.com/troglobit/editline/issues)
+AC_INIT(editline, 2.0.0, https://github.com/troglobit/editline/issues)
 AC_CONFIG_AUX_DIR(aux)
 AM_INIT_AUTOMAKE([1.11 foreign dist-xz])
 AM_SILENT_RULES([yes])
@@ -6,7 +6,7 @@ AM_SILENT_RULES([yes])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_SRCDIR([src/editline.c])
 AC_CONFIG_HEADERS([config.h])
-AC_CONFIG_FILES([Makefile libeditline.pc src/Makefile include/Makefile man/Makefile examples/Makefile])
+AC_CONFIG_FILES([Makefile libeditline.pc src/Makefile include/Makefile man/Makefile examples/Makefile test/Makefile])
 
 # Checks for programs.
 AC_PROG_CC
@@ -22,6 +22,16 @@ AC_HEADER_STAT
 # Check for malloc.h instead of AC_FUNC_MALLOC/REALLOC AIX and others
 # mess up the traditional malloc check.
 AC_CHECK_HEADERS([malloc.h signal.h stdlib.h string.h termcap.h termio.h termios.h sgtty.h unistd.h])
+
+# For the test suite: forkpty() lives in libutil on glibc, in libc on the BSDs.
+# Keep the dependency on the test program only, out of the library and examples.
+AC_CHECK_HEADERS([pty.h util.h libutil.h])
+save_LIBS="$LIBS"
+LIBS=""
+AC_SEARCH_LIBS([forkpty], [util])
+PTY_LIBS="$LIBS"
+LIBS="$save_LIBS"
+AC_SUBST([PTY_LIBS])
 
 # In termios.h or in sys/ioctl.g?
 AC_HEADER_TIOCGWINSZ
@@ -71,7 +81,7 @@ AC_ARG_ENABLE([examples],
 AS_IF([test "x$enable_unique_history" != "xno"], [
    AC_DEFINE(CONFIG_UNIQUE_HISTORY, 1, [Define to skip duplicate lines in the scrollback history.])])
 
-AS_IF([test "x$enable_terminal_bell" != "xno"], [
+AS_IF([test "x$enable_arrow_keys" != "xno"], [
    AC_DEFINE(CONFIG_ANSI_ARROWS, 1, [Define to include ANSI arrow keys support.])])
 
 AS_IF([test "x$enable_eof" != "xno"], [
