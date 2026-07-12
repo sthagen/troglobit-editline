@@ -57,6 +57,7 @@ typedef struct {
 */
 typedef struct {
     int         Size;
+    int         Cap;		/* allocated Lines slots, HIST_CAP when in sync */
     int         Pos;
     char      **Lines;
 } el_hist_t;
@@ -79,12 +80,17 @@ int               rl_quit;
 int               rl_susp;
 #endif
 
-int               el_hist_size = 15;
+int               el_hist_size = 64;
 static el_hist_t  H = {
     .Size  = 0,
+    .Cap   = 0,
     .Pos   = 0,
     .Lines = NULL,
 };
+
+/* The scrollback holds one more entry than el_hist_size, an editline
+ * tradition; this is the one place that "+ 1" lives. */
+#define HIST_CAP  (el_hist_size + 1)
 
 static char        NILSTR[] = "";
 static const char *el_input = NILSTR;
@@ -1386,16 +1392,52 @@ static char *editinput(int complete)
     return NULL;
 }
 
+/* (Re)size the scrollback to hold HIST_CAP entries.  Called before every
+ * add so a change to el_hist_size takes effect and never overflows the
+ * buffer.  Growing keeps all entries; shrinking discards the oldest ones
+ * that no longer fit. */
+/* Evict the oldest history entry, shifting the rest down. */
+static void hist_drop_oldest(void)
+{
+    int i;
+
+    free(H.Lines[0]);
+    for (i = 1; i < H.Size; i++)
+        H.Lines[i - 1] = H.Lines[i];
+    H.Size--;
+}
+
 static void hist_alloc(void)
 {
-    if (!H.Lines)
-        H.Lines = calloc(1 + el_hist_size, sizeof(char *));
+    char **lines;
+    int    i;
+
+    if (H.Lines && H.Cap == HIST_CAP)
+        return;
+
+    while (H.Size > HIST_CAP)
+        hist_drop_oldest();
+
+    lines = realloc(H.Lines, HIST_CAP * sizeof(char *));
+    if (!lines)
+        return;			/* keep the existing buffer on failure */
+
+    for (i = H.Size; i < HIST_CAP; i++)
+        lines[i] = NULL;	/* clear unused tail, so free() stays safe */
+
+    H.Lines = lines;
+    H.Cap   = HIST_CAP;
+    if (H.Pos >= H.Size)
+        H.Pos = H.Size > 0 ? H.Size - 1 : 0;
 }
 
 static void hist_add(const char *p)
 {
-    int i;
     char *s;
+
+    hist_alloc();
+    if (!H.Lines)
+        return;
 
 #ifdef CONFIG_UNIQUE_HISTORY
     if (H.Size && strcmp(p, H.Lines[H.Size - 1]) == 0)
@@ -1406,14 +1448,9 @@ static void hist_add(const char *p)
     if (s == NULL)
         return;
 
-    if (H.Size <= el_hist_size) {
-        H.Lines[H.Size++] = s;
-    } else {
-        free(H.Lines[0]);
-        for (i = 0; i < el_hist_size; i++)
-            H.Lines[i] = H.Lines[i + 1];
-        H.Lines[i] = s;
-    }
+    if (H.Size == HIST_CAP)		/* full: make room by evicting the oldest */
+        hist_drop_oldest();
+    H.Lines[H.Size++] = s;
     H.Pos = H.Size - 1;
 }
 
@@ -1545,15 +1582,13 @@ void rl_uninitialize(void)
 
     /* Uninitialize the history */
     if (H.Lines) {
-        for (i = 0; i <= el_hist_size; i++) {
-            if (H.Lines[i])
-                free(H.Lines[i]);
-            H.Lines[i] = NULL;
-        }
+        for (i = 0; i < H.Size; i++)
+            free(H.Lines[i]);
         free(H.Lines);
         H.Lines = NULL;
     }
     H.Size = 0;
+    H.Cap = 0;
     H.Pos = 0;
 
     if (old_search)
@@ -1801,8 +1836,13 @@ int read_history(const char *filename)
     if (!fp)
 	return EOF;
 
-    H.Size = 0;
-    while (H.Size < el_hist_size && (line = read_line(fp)) != NULL) {
+    /* Replace any existing scrollback; freeing avoids leaking it on reload. */
+    while (H.Size > 0)
+	free(H.Lines[--H.Size]);
+
+    /* Read up to capacity; write_history() writes the same, so a full file
+     * round-trips without dropping its most recent entry (issue #78). */
+    while (H.Size < HIST_CAP && (line = read_line(fp)) != NULL) {
 	add_history(line);
 	free(line);
     }

@@ -39,3 +39,4 @@ test/homeend
 *.a
 *.log
 *.trs
+*.tmp

@@ -1,3 +1,16 @@
+editline (2.1.0) unstable; urgency=medium
+
+  * Raise the default history size (`el_hist_size`) from 15 to 64
+  * Resize the scrollback when `el_hist_size` changes, so it can be set
+    at any time rather than only before the first use of history
+  * Fix #78: the most recent entry was dropped when reloading a full
+    history file; `read_history()` now reads as many entries as
+    `write_history()` writes
+  * Fix a memory leak in `read_history()` when reloading over an existing
+    history
+
+ -- Joachim Wiberg <troglobit@gmail.com>  Sat, 04 Jul 2026 12:45:11 +0200
+
 editline (2.0.0) unstable; urgency=medium
 
   * Add UTF-8 support, issue #37: cursor movement, deletion, word motion

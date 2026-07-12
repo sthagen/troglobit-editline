@@ -3,6 +3,21 @@ Change Log
 
 All notable changes to the project are documented in this file.
 
+[2.1.0][] - 2026-07-04
+----------------------
+
+### Changes
+- Raise the default history size (`el_hist_size`) from 15 to 64
+- Resize the scrollback when `el_hist_size` changes, so it can be set at
+  any time rather than only before the first use of history
+
+### Fixes
+- Fix #78: the most recent entry was dropped when reloading a full
+  history file; `read_history()` now reads as many entries as
+  `write_history()` writes
+- Fix a memory leak in `read_history()` when reloading over an existing
+  history
+
 [2.0.0][] - 2026-06-22
 ----------------------
 
@@ -287,6 +302,7 @@ Adaptations to Debian editline package.
 
 
 [UNRELEASED]:    https://github.com/troglobit/editline/compare/2.0.0...HEAD
+[2.1.0]:         https://github.com/troglobit/editline/compare/2.0.0...2.1.0
 [2.0.0]:         https://github.com/troglobit/editline/compare/1.17.0...2.0.0
 [1.17.1]:        https://github.com/troglobit/editline/compare/1.17.0...1.17.1
 [1.17.0]:        https://github.com/troglobit/editline/compare/1.16.1...1.17.0
